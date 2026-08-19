@@ -1,22 +1,8 @@
-<!--
-╔══════════════════════════════════════════════════════════════════════════╗
-║  HOW TO USE THIS FILE                                                    ║
-║                                                                          ║
-║  Text NOT in «angle quotes» describes design decisions that are baked    ║
-║  into the code. Those are safe to keep once you have run the notebook.   ║
-║                                                                          ║
-║  Text in «angle quotes» is a RESULT. Replace every one with what YOUR    ║
-║  run actually produced.   Find them:   grep -n "«" WRITEUP.md            ║
-║                                                                          ║
-║  The rubric warns explicitly: graders check this document against your   ║
-║  code and captured output. A claim your own notebook contradicts costs   ║
-║  more than an admitted gap. Write from your results, not from the plan.  ║
-╚══════════════════════════════════════════════════════════════════════════╝
--->
+
 
 # Murshid — Capstone Write-Up
 
-**Author:** Khalid Aljohar, Abdullah Alfawzan, Abdulaziz Almeshary, Saud Alghuraybi, Ahmed Bakhashwain, Moath Aljubirmme
+**Author:** Khalid ALjohar, Abdullah Alfawzan, Abdulaziz Almeshary, Saud Alghuraybi, Ahmed Bakhashwain, Moath Aljubirmme
 **Declared track:** **A — Supervisor + Workers**
 **Programme:** SDAIA Academy — Building Agentic AI Systems,  16-20 August 2026
 
@@ -523,14 +509,23 @@ far less than the parent.
 English, two Arabic, covering all four destinations — and scored the classifier
 with a deterministic grader comparing the predicted `destination` to the
 expected one. No LLM judge, so there is nothing to second-guess. The experiment
-scored «N/6 — read this off the routes_correctly column in LangSmith».
+scored **6/6 — `routes_correctly` average 1.00**, across two separate
+experiment runs (`murshid-routing-25ef4d3b` and `murshid-routing-82d5521a`),
+at P50 latencies of 0.47s and 0.56s respectively.
+
+Those latency figures are a useful cross-check on the trace above. The
+evaluation calls the classifier *only* — no retrieval, no synthesis — and its
+P50 of ~0.5s lines up with the 0.52s `classify` span in the full run. The
+routing decision costs about half a second wherever it is measured, which
+means the 3.29s total in the trace is genuinely not the model's doing.
 
 The dataset produced a small lesson of its own. My first attempt reported
 `0it [00:00, ?it/s]` — zero examples evaluated — because an earlier crashed run
 had created the dataset before the examples were added, and the
 `if not client.has_dataset(...)` guard then skipped populating it on every run
 after that. The experiment link existed and looked entirely normal; it was
-simply empty. Deleting and rebuilding the dataset fixed it. It is a good
+simply empty. Rebuilding the dataset with its examples fixed it, and every run
+since has scored 6/6. It is a good
 illustration of why the observability section matters: the failure was silent,
 and the only way to notice was to look at the number of examples actually
 scored.
