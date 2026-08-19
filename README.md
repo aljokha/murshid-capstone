@@ -4,6 +4,7 @@
 
 
 
+
 **Author:** Khalid ALjohar, Abdullah Alfawzan, Abdulaziz Almeshary, Saud Alghuraybi, Ahmed Bakhashwain, Moath Aljubir
 **Training programme:** SDAIA Academy — Building Agentic AI Systems
 **Cohort dates:** e.g. 16-20 August 2026
