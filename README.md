@@ -5,9 +5,9 @@
 
 
 
-**Author:** Khalid ALjohar, Abdullah Alfawzan, Abdulaziz Almeshary, Saud Alghuraybi, Ahmed Bakhashwain, Moath Aljubir
+**Authors:** Khalid ALjohar, Abdullah Alfawzan, Abdulaziz Almeshary, Saud Alghuraybi, Ahmed Bakhashwain, Moath Aljubir
 **Training programme:** SDAIA Academy — Building Agentic AI Systems
-**Cohort dates:** e.g. 16-20 August 2026
+**Cohort dates:** 16–20 August 2026
 **Declared capstone track:** **A — Supervisor + Workers**
 (Track C multi-source routing and Track B human escalation are also implemented — see [Architecture](#architecture).)
 **SDAIA Academy GitHub:** https://github.com/SDAIAAcademy
@@ -42,7 +42,7 @@ into. They just ask.
 |---|---|---|
 | "What GPA do I need to stay off probation?" | `academic` | Searches the academic store only, answers from the probation regulation |
 | "لا أستطيع الدخول إلى بوابة الطالب" | `campus` | No English keyword appears anywhere in that sentence — the LLM classifier still routes it correctly, and the answer comes back in Arabic |
-| "How do I appeal a grade, and where is the IT helpdesk?" | `both` | Searches both stores concurrently, merges the context, answers both halves |
+| "How do I appeal a grade, and where is the IT helpdesk?" | `both` | Searches both stores concurrently, merges the context, answers both halves. (On `gpt-oss-20b` the *bare* classifier returns `academic` for this one — see WRITEUP §2.) |
 | "I want to withdraw from STAT301" | `action` | Pauses. An advisor reviews, edits the stated reason, approves. Only then is it filed |
 
 ---
@@ -109,6 +109,11 @@ is a `@task`.
 - **Track B escalation** is also implemented because a course withdrawal is
   irreversible, which makes a human approval gate a real requirement rather than
   a decorative one.
+- **Model.** Groq decommissioned `llama-3.3-70b-versatile` (the course default)
+  on 16 August 2026, so the notebook queries the account for available models
+  and picks the first supported one. This run used `openai/gpt-oss-20b`, chosen
+  over `gpt-oss-120b` because Groq's free tier allows 8,000 tokens per minute
+  per model and a full run exceeds that on the larger one.
 - **Multilingual embeddings.** The knowledge base is English with Arabic
   summaries, and students ask in both languages, so the embedding model is
   `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` rather than the
