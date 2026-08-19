@@ -1,0 +1,33 @@
+# --- secrets: never commit these ---
+.env
+*.key
+secrets.json
+
+# --- generated state ---
+*.db
+*.sqlite
+*.sqlite3
+chroma/
+chroma_db/
+.chroma/
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# --- notebooks ---
+.ipynb_checkpoints/
+
+# --- model / embedding caches ---
+.cache/
+sentence_transformers_cache/
+
+# --- os / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
