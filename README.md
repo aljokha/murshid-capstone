@@ -1,10 +1,4 @@
-<!--
-╔══════════════════════════════════════════════════════════════════════════╗
-║  BEFORE YOUR FIRST COMMIT — replace every «angle-quoted» placeholder.    ║
-║  Run this to find them all:   grep -rn "«" .                             ║
-║  The rubric explicitly checks that no template placeholder text is left. ║
-╚══════════════════════════════════════════════════════════════════════════╝
--->
+
 
 # Murshid (مُرشد) — A University Student Services Agent
 
