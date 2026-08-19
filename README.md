@@ -1,0 +1,220 @@
+<!--
+╔══════════════════════════════════════════════════════════════════════════╗
+║  BEFORE YOUR FIRST COMMIT — replace every «angle-quoted» placeholder.    ║
+║  Run this to find them all:   grep -rn "«" .                             ║
+║  The rubric explicitly checks that no template placeholder text is left. ║
+╚══════════════════════════════════════════════════════════════════════════╝
+-->
+
+# Murshid (مُرشد) — A University Student Services Agent
+
+**Author:** Khalid ALjohar, Abdullah Alfawzan, Abdulaziz Almeshary, Saud Alghuraybi, Ahmed Bakhashwain, Moath Aljubir
+**Training programme:** SDAIA Academy — Building Agentic AI Systems
+**Cohort dates:** e.g. 16-20 August 2026
+**Declared capstone track:** **A — Supervisor + Workers**
+(Track C multi-source routing and Track B human escalation are also implemented — see [Architecture](#architecture).)
+**SDAIA Academy GitHub:** https://github.com/SDAIAAcademy
+
+---
+
+## What it does
+
+A university's answers live in two very different places. Academic regulations —
+grading, attendance, appeals, withdrawal deadlines, graduation requirements —
+belong to the Registrar. Campus services — library, IT helpdesk, housing,
+dining, careers, wellbeing — belong to Student Affairs. A student asking a
+question does not know or care which of those two worlds their question falls
+into. They just ask.
+
+**Murshid** takes one free-text question, in Arabic or English, and:
+
+1. **Routes it** with an LLM classifier to the right specialist — Academic
+   Affairs, Campus Services, both, or "this is a request to *file* something".
+2. **Answers it** from that specialist's own private document store, so a
+   question about library hours never retrieves a grading regulation.
+3. **Remembers the student** across separate conversations — their preferred
+   language, their major, how many times they have asked — so a student who
+   asked in Arabic last week is answered in Arabic this week without saying so.
+4. **Stops and asks a human** before doing anything irreversible. A course
+   withdrawal is deadline-bound and cannot be undone, so the workflow pauses,
+   a student advisor approves or edits the request, and only then is it filed.
+
+### Worked examples
+
+| Student asks | Routed to | What happens |
+|---|---|---|
+| "What GPA do I need to stay off probation?" | `academic` | Searches the academic store only, answers from the probation regulation |
+| "لا أستطيع الدخول إلى بوابة الطالب" | `campus` | No English keyword appears anywhere in that sentence — the LLM classifier still routes it correctly, and the answer comes back in Arabic |
+| "How do I appeal a grade, and where is the IT helpdesk?" | `both` | Searches both stores concurrently, merges the context, answers both halves |
+| "I want to withdraw from STAT301" | `action` | Pauses. An advisor reviews, edits the stated reason, approves. Only then is it filed |
+
+---
+
+## Architecture
+
+```
+                        ┌──────────────────────────────┐
+   Student question ───▶│  Pydantic guardrail (Query)  │
+                        └──────────────┬───────────────┘
+                                       ▼
+                        ┌──────────────────────────────┐
+                        │  load_profile  (Store read)  │  long-term memory
+                        │  ("students", student_id)    │
+                        └──────────────┬───────────────┘
+                                       ▼
+                        ┌──────────────────────────────┐
+                        │      SUPERVISOR / ROUTER     │  Track A + Track C
+                        │  with_structured_output(     │
+                        │        MurshidRoute)         │
+                        │  Literal[academic|campus|    │
+                        │          both|action]        │
+                        └───┬─────────┬─────────┬──────┘
+                            │         │         │
+              ┌─────────────┘         │         └──────────────┐
+              ▼                       ▼                        ▼
+   ┌────────────────────┐  ┌────────────────────┐  ┌──────────────────────┐
+   │  academic_agent    │  │   campus_agent     │  │   action_agent       │
+   │  tools:            │  │   tools:           │  │   tools:             │
+   │   search_academic  │  │    search_campus   │  │    submit_withdrawal │
+   │   compute_gpa      │  │                    │  │    file_appeal       │
+   │   credits_to_grad  │  │                    │  └──────────┬───────────┘
+   ├────────────────────┤  ├────────────────────┤             │
+   │ Chroma:"academic"  │  │ Chroma:"campus"    │             ▼
+   │  8 regulations     │  │  8 service pages   │  ┌──────────────────────┐
+   └─────────┬──────────┘  └─────────┬──────────┘  │  interrupt()         │
+             │                       │             │  advisor approves /  │
+             └───────────┬───────────┘             │  edits / rejects     │
+                         ▼                         └──────────┬───────────┘
+              ┌──────────────────────┐                        │
+              │  synthesize_answer   │◀───────────────────────┘
+              │  (style from profile)│
+              └──────────┬───────────┘
+                         ▼
+              ┌──────────────────────┐
+              │ save_profile (Store) │  long-term write
+              └──────────┬───────────┘
+                         ▼
+                    Final answer
+```
+
+Everything above runs inside a single LangGraph **Functional API** `@entrypoint`,
+with a checkpointer (short-term state) and a Store (long-term facts). Every box
+is a `@task`.
+
+### Why these choices
+
+- **Track A (Supervisor + workers)** is the declared track because it produces
+  the clearest evidence that the *LLM* made the routing decision: the printed
+  `transfer_to_academic_agent` / `transfer_to_campus_agent` handoff tool calls.
+- **Track C routing** is also implemented because two genuinely separate vector
+  stores are what make routing meaningful — if both retrievers query the same
+  store, routing changes nothing.
+- **Track B escalation** is also implemented because a course withdrawal is
+  irreversible, which makes a human approval gate a real requirement rather than
+  a decorative one.
+- **Multilingual embeddings.** The knowledge base is English with Arabic
+  summaries, and students ask in both languages, so the embedding model is
+  `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` rather than the
+  English-only `all-mpnet-base-v2`. Both are free and run locally with no API
+  key. Cross-lingual retrieval is the reason for the swap.
+
+---
+
+## How to run
+
+### Option A — Google Colab (recommended, no local setup)
+
+No GitHub account required to run it.
+
+1. Go to [colab.research.google.com](https://colab.research.google.com) and
+   **Upload** `notebooks/murshid_capstone.ipynb`.
+2. Open the **Files** panel (folder icon, left sidebar) and upload
+   `murshid-capstone.zip`. The notebook unzips it automatically.
+3. Add your `GROQ_API_KEY` to the Colab **Secrets** panel (the key icon in the
+   left sidebar) and enable notebook access. Do not paste keys into a cell.
+4. Optionally add `LANGSMITH_API_KEY` the same way, for section 8.
+5. **Runtime → Restart session and run all.**
+
+Once the project *is* on GitHub, you can skip the zip upload by setting
+`REPO_URL` in section 2 and letting the notebook clone it instead.
+
+### Option B — Local
+
+```bash
+git clone https://github.com/aljokha/murshid-capstone.git
+cd murshid-capstone
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+cp .env.example .env      # then edit .env and add your keys
+
+python -m src.ingest      # builds and smoke-tests both vector stores
+jupyter notebook notebooks/murshid_capstone.ipynb
+```
+
+The embedding model downloads once (~1 GB) on first run and is cached
+afterwards. It needs no API key.
+
+---
+
+## Repository layout
+
+```
+murshid-capstone/
+├── README.md                     this file
+├── WRITEUP.md                    one paragraph per rubric section
+├── requirements.txt
+├── .env.example                  variable NAMES only, no values
+├── .gitignore                    excludes .env, *.db, chroma/, caches
+├── notebooks/
+│   └── murshid_capstone.ipynb    the graded artefact — run top to bottom
+├── src/
+│   └── ingest.py                 standalone load → split → embed → store
+├── data/
+│   ├── academic/                 8 academic regulation documents
+│   └── campus/                   8 campus service documents
+└── docs/
+    ├── architecture.md           design decisions in detail
+    └── evidence/                 screenshots (LangSmith trace, handoffs)
+```
+
+The notebook is the single source of truth for the graded logic. `src/ingest.py`
+is the one piece deliberately duplicated outside it, because building the vector
+stores is useful as a standalone step. Nothing else is mirrored, so there is no
+risk of the notebook and a module drifting apart.
+
+---
+
+## Rubric map
+
+| # | Rubric section | Pts | Where the code is | Where the evidence is |
+|---|---|---|---|---|
+| 1 | Agent fundamentals | 15 | Notebook §7 (tools), §8 (`MurshidRoute`) | Printed tool call with arguments |
+| 2 | Multi-agent / routing | 15 | Notebook §8 (classifier), §9 (supervisor) | Routing table + printed `transfer_to_*` calls |
+| 3 | RAG pipeline | 15 | Notebook §5–6, `src/ingest.py` | Smoke test + cross-store isolation test + Hybrid justification in WRITEUP |
+| 4 | Context & state | 15 | Notebook §10 | Cross-thread test: conv-A → 1, conv-B → 2, conv-C → 1 |
+| 5 | Human-in-the-loop | 10 | Notebook §11 (`request_approval`) | Interrupt payload + `Command(resume=...)` + advisor's edit in the registry |
+| 6 | Functional API & errors | 15 | Notebook §11–12 | `@task`/`@entrypoint` throughout; printed retry attempt #1 → #2 |
+| 7 | Workflow pattern | 10 | Notebook §8 routing branch | Named **Routing** explicitly in WRITEUP |
+| 8 | LangSmith | 5 | Notebook §3, §18 | Trace observation in WRITEUP + evaluation experiment |
+
+Full write-up: [WRITEUP.md](WRITEUP.md). Design detail: [docs/architecture.md](docs/architecture.md).
+
+---
+
+## Data
+
+The 16 documents in `data/` describe a **fictional** institution, "Al-Noor
+University". They were written for this project. No real university policy, no
+personal data, and nothing confidential is included. The structure is designed
+so real documents can replace them file-for-file without changing any code.
+
+---
+
+## Acknowledgements
+
+Built for the SDAIA Academy programme **Building Agentic AI Systems**, following
+the course material at
+[mohammadyusif.github.io/agentic-ai-systems](https://mohammadyusif.github.io/agentic-ai-systems/)
+(Days 1–4 by Hassan Algoz; Day 5 and the capstone preparation material by
+Mohammad Yusif).
