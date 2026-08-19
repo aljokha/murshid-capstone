@@ -214,4 +214,4 @@ Built for the SDAIA Academy programme **Building Agentic AI Systems**, following
 the course material at
 [mohammadyusif.github.io/agentic-ai-systems](https://mohammadyusif.github.io/agentic-ai-systems/)
 (Days 1–4 by Hassan Algoz; Day 5 and the capstone preparation material by
-Mohammad Yusif).
+Mohammad Yusif). 
