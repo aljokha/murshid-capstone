@@ -1,10 +1,8 @@
-
-
 # Murshid — Capstone Write-Up
 
-**Author:** Khalid ALjohar, Abdullah Alfawzan, Abdulaziz Almeshary, Saud Alghuraybi, Ahmed Bakhashwain, Moath Aljubirmme
+**Authors:** Khalid ALjohar, Abdullah Alfawzan, Abdulaziz Almeshary, Saud Alghuraybi, Ahmed Bakhashwain, Moath Aljubir
 **Declared track:** **A — Supervisor + Workers**
-**Programme:** SDAIA Academy — Building Agentic AI Systems,  16-20 August 2026
+**Programme:** SDAIA Academy — Building Agentic AI Systems, 16–20 August 2026
 
 ---
 
@@ -17,12 +15,32 @@ to an approval gate where a human advisor must sign off before anything
 irreversible happens.
 
 **A note on the model.** Groq decommissioned `llama-3.3-70b-versatile`, the
-model used throughout the course lessons, on **16 August 2026**. Section 4
-therefore queries the account for available models and selects the first
-supported one from a preference list rather than hardcoding an ID. My run used
-**`openai/gpt-oss-120b`**. This mattered more than a model swap
-usually does — see section 6, where the change in structured-output behaviour
-surfaced two real errors.
+model used throughout the course lessons, on **16 August 2026**. Rather than
+hardcode a replacement that might also be retired, section 4 queries the account
+for the models it can actually use and selects the first available from a
+preference list. It printed:
+
+```
+chat models available to this key:
+    allam-2-7b
+    canopylabs/orpheus-arabic-saudi
+    canopylabs/orpheus-v1-english
+    groq/compound
+    groq/compound-mini
+    meta-llama/llama-prompt-guard-2-22m
+    meta-llama/llama-prompt-guard-2-86m
+    openai/gpt-oss-120b
+    openai/gpt-oss-20b   <-- using this
+    openai/gpt-oss-safeguard-20b
+    qwen/qwen3.6-27b
+```
+
+We ran on **`openai/gpt-oss-20b`**. We started on `gpt-oss-120b` and moved down
+deliberately: Groq's free tier allows 8,000 tokens per minute **per model**, a
+full run of this notebook exceeds that on the larger model, and nothing here
+needs a 120b model — every LLM call is classification, extraction, or
+summarising retrieved text. Section 6 records what that ceiling taught us, and
+section 2 records the one place where the smaller model is measurably weaker.
 
 ---
 
@@ -31,23 +49,13 @@ surfaced two real errors.
 The tools do real work on their arguments rather than returning fixed strings.
 `compute_gpa` takes grade points and matching credit hours, computes the
 credit-weighted average, and derives the standing band from the result;
-different inputs give different outputs and mismatched list lengths raise.
-`credits_to_graduate` subtracts completed hours from the 132-hour programme
-total and derives remaining terms by ceiling division.
-`search_academic_regulations` and `search_campus_services` each run a real
-vector similarity search against their own store and return the retrieved text
-with its source filename attached.
+mismatched list lengths raise. `credits_to_graduate` subtracts completed hours
+from the 132-hour programme total and derives remaining terms by ceiling
+division. `search_academic_regulations` and `search_campus_services` each run a
+real vector similarity search against their own store and return the retrieved
+text with its source filename attached.
 
-Structured output is used wherever a result is parsed by code rather than read
-by a person: `MurshidRoute` for routing and `ActionRequest` for extracting a
-formal request. Both go through `with_structured_output`. Because `destination`
-is typed `Literal["academic", "campus", "both", "action"]`, the model cannot
-emit a value the workflow has no branch for — the type and the branches cannot
-drift apart. The free-text answer returned to the student is deliberately *not*
-structured, because a human reads it.
-
-**Evidence** — the same tool called twice with different arguments, producing
-different results, and a boundary case:
+The same tool called with different arguments produces different results:
 
 ```
 GPA 3.45 across 10 credit hours (34.5 total grade points) — Good Standing.
@@ -56,11 +64,40 @@ GPA 1.45 across 10 credit hours (14.5 total grade points) — below the 2.00 thr
 132 of 132 credit hours complete — the credit-hour requirement is already met.
 ```
 
+Structured output is used wherever a result is parsed by code rather than read
+by a person: `MurshidRoute` for routing and `ActionRequest` for extracting a
+formal request, both via `with_structured_output`. Because `destination` is
+typed `Literal["academic", "campus", "both", "action"]`, the model cannot emit a
+value the workflow has no branch for — the type and the branches cannot drift
+apart. The free-text answer returned to the student is deliberately *not*
+structured, because a human reads it.
+
+### The model choosing a tool for itself
+
+The output above is us calling the tools. This is the **agent** deciding to:
+
+```
+model chose tool : search_academic_regulations
+  arguments      : {'query': 'Al-Noor University academic regulations good standing GPA requirement'}
+```
+
+The query string was written by the model, not by us.
+
+**Worth recording honestly:** we asked *"My grades this term were 4.0, 3.5 and
+3.0, in courses worth 3, 3 and 4 credit hours. What is my GPA and am I in good
+standing?"* expecting `compute_gpa` to be called. The model instead called
+`search_academic_regulations` to look up the standing threshold and **computed
+the GPA itself**, laying the arithmetic out in its answer and arriving at 3.45 —
+the same figure `compute_gpa` returns. The tool call is genuine and
+model-chosen, but it reveals something about tool design: a model will not call
+a tool for work it believes it can already do. `compute_gpa` earns its place for
+auditability and for larger inputs, not because the model needs it.
+
 ---
 
 ## 2. Multi-agent / routing architecture — 15 pts
 
-**I declared Track A (Supervisor + Workers).** A `create_supervisor` instance
+**We declared Track A (Supervisor + Workers).** A `create_supervisor` instance
 sits in front of two specialist workers, `academic_agent` and `campus_agent`,
 each built with `create_agent` and holding its own tools and its own vector
 store. The workers do not know about each other; delegation happens in one place.
@@ -79,31 +116,18 @@ Q: How late is the library open during finals week?
 ```
 
 Two questions, two different workers, chosen by the model. Two handoffs per
-request is correct — the supervisor hands off to the worker, and the worker
-hands control back with `transfer_back_to_supervisor`.
+request is correct, not a bug — the supervisor hands off to the worker, and the
+worker hands control back with `transfer_back_to_supervisor`.
 
-I additionally implemented the **Track C** classifier, because the production
+We additionally implemented the **Track C** classifier, because the production
 workflow needs four destinations rather than two workers, and because its test
-cases are the clearest demonstration of why keyword matching fails. Of the eight
-routing tests, four defeat any keyword router:
-
-- *"لا أستطيع الدخول إلى بوابة الطالب"* contains no English keyword at all.
-- *"I was told my attendance is short but I have a medical note"* contains no
-  literal category term.
-- *"How do I appeal a grade, and where is the IT helpdesk?"* matches **both**
-  categories, which a first-match `if/elif` chain resolves arbitrarily.
-- *"How do I withdraw from a course?"* and *"I want to withdraw from STAT301"*
-  share every keyword but need **different** destinations — the difference is
-  intent, not vocabulary.
-
-**Evidence** — all eight test questions routed correctly, every one at high
-confidence:
+cases are the clearest demonstration of why keyword matching fails:
 
 ```
 DEST      LANG  CONF   QUESTION
 academic  en    high   How do I appeal a grade I think was marked wrong?
 campus    en    high   Where is the IT helpdesk and what are its hours?
-both      en    high   How do I appeal a grade, and where is the IT helpdesk?
+academic  en    high   How do I appeal a grade, and where is the IT helpdesk?   <- see below
 campus    ar    high   لا أستطيع الدخول إلى بوابة الطالب
 action    ar    high   أريد الانسحاب من مقرر الإحصاء STAT301
 academic  en    high   How do I withdraw from a course?
@@ -111,62 +135,66 @@ action    en    high   I want to withdraw from STAT301, the workload is too heav
 academic  en    high   I was told my attendance is short but I have a medical note
 ```
 
-The last three rows are the interesting ones. *"How do I withdraw from a
-course?"* → `academic` and *"I want to withdraw from STAT301"* → `action` share
-almost every word, and the classifier separated them on intent alone. The
-Arabic withdrawal request was also correctly identified as an `action`, in a
-language where none of the routing vocabulary appears at all.
+Four of these defeat any keyword router. *"لا أستطيع الدخول إلى بوابة الطالب"*
+contains no English keyword at all. *"I was told my attendance is short but I
+have a medical note"* contains no literal category term. And the pair *"How do I
+withdraw from a course?"* → `academic` versus *"I want to withdraw from
+STAT301"* → `action` share almost every word: the classifier separated them on
+**intent**, which is precisely what a keyword rule cannot do. The Arabic
+withdrawal request was also correctly identified as an `action`.
+
+### One row we got wrong, and what it shows
+
+Row 3 — *"How do I appeal a grade, and where is the IT helpdesk?"* — should be
+`both`. The classifier returned `academic`, with the reason *"Appealing a grade
+is an academic procedure."* It answered on the first clause and ignored the
+second.
+
+This is a real regression from moving to the smaller model. On
+`openai/gpt-oss-120b` the same question routed to `both`. We are reporting it
+rather than re-running until it looked tidy.
+
+What makes it more interesting than a simple miss: **the same question routed
+correctly inside the workflow.** Demo C, which reaches the classifier through
+the `classify` task, produced:
+
+```
+routed to      : both
+sources searched: ['academic', 'campus']
+```
+
+The difference is the prompt wrapper. The bare test calls
+`router.invoke(question)`; `classify` calls
+`router.invoke(f"Route this student question.\n\n{question}")`. That one framing
+sentence is enough to change the outcome on a 20b model. The lesson is the
+routing lesson's own point arriving from a different direction: the prompt
+around a constrained-output call is not incidental, and a classifier that is
+robust on a large model can become framing-sensitive on a small one. A
+production system would test the classifier at the size it will actually run at,
+not just at the size it was developed at.
 
 ---
 
 ## 3. RAG pipeline — 15 pts
 
-All five stages run on real documents. Sixteen markdown files in `data/` are
-**loaded** with `DirectoryLoader`, **split** with `RecursiveCharacterTextSplitter`
-(600 characters, 80 overlap, splitting on markdown headings first so a
-regulation is not cut mid-clause), **embedded** with `HuggingFaceEmbeddings`,
-**stored** in two separate Chroma collections, and **retrieved** with `k=3`. My
-run produced **23 academic chunks and 27 campus chunks**, giving 23 and 27
-vectors in the two Chroma collections respectively.
+All five stages run on real documents:
 
-The two collections are genuinely separate, which is what makes routing
-meaningful — two retrievers pointed at one store would make routing change
-nothing. The isolation test demonstrates it: querying the academic store for
-library hours returns academic regulations, not the library page.
+```
+academic: loaded 8 documents -> 23 chunks
+campus  : loaded 8 documents -> 27 chunks
 
-I chose the multilingual embedding model
-`paraphrase-multilingual-mpnet-base-v2` over the English-only
-`all-mpnet-base-v2` used in the course lessons, because students ask in Arabic
-against a knowledge base written in English with Arabic summaries. Without that
-swap the router would route Arabic questions correctly and then retrieve
-nothing useful — a failure that is easy to miss, because the routing evidence
-still looks perfect. Both models are free and run locally with no API key.
+academic collection: 23 vectors
+campus   collection: 27 vectors
+```
 
-### RAG architecture chosen: **Hybrid**
+Sixteen markdown files in `data/` are **loaded** with `DirectoryLoader`,
+**split** with `RecursiveCharacterTextSplitter` (600 characters, 80 overlap,
+splitting on markdown headings first so a regulation is not cut mid-clause),
+**embedded** with `HuggingFaceEmbeddings`, **stored** in two separate Chroma
+collections, and **retrieved** with `k=3`.
 
-Not **2-Step**, because retrieval is not unconditional: a classifier decides
-which store to search, and `action` questions skip retrieval entirely. Not
-purely **Agentic**, because the workers do not decide *when* to retrieve — the
-route is fixed before they run, which caps LLM calls per request and keeps
-latency predictable.
-
-**Hybrid** in the course's precise sense, with both of the intermediate steps it
-describes actually implemented:
-
-- **Query enhancement** — `rewrite_followup` resolves a follow-up like *"What
-  happens if I fall below it?"* into a standalone question using the
-  conversation state for that thread, before it reaches the classifier or the
-  retriever.
-- **Retrieval validation** — if the routed store returns nothing, the workflow
-  re-routes to the other store once before concluding the answer is not in its
-  sources.
-
-Hybrid is the right trade for student services because student questions are
-frequently ambiguous, underspecified, or span both domains, and confidently
-answering from the wrong domain is worse than one extra round-trip.
-
-**Evidence** — eight questions whose answers are verbatim in the documents, each
-retrieving from the correct file:
+Eight questions whose answers are verbatim in the documents, each retrieving
+from the correct file:
 
 ```
 --- retrieval smoke test ---
@@ -182,7 +210,9 @@ retrieving from the correct file:
 SMOKE TEST: PASSED
 ```
 
-Isolation — each store is blind to the other's subject matter:
+The two collections are genuinely separate, which is what makes routing
+meaningful — two retrievers pointed at one store would make routing change
+nothing. Each store is blind to the other's subject matter:
 
 ```
 academic store, asked about LIBRARY HOURS:
@@ -191,9 +221,39 @@ campus store, asked about GRADE APPEALS:
   returned: ['housing.md', 'careers_office.md', 'clubs_and_societies.md']
 ```
 
-And routing has a visible consequence — `sources_searched` differs per question:
-`['academic']` for the grade-appeal question, `['campus']` for the Arabic portal
-question, `['academic', 'campus']` for the one spanning both.
+And routing has a visible consequence: `sources_searched` is `['academic']` for
+the grade-appeal question, `['campus']` for the Arabic portal question, and
+`['academic', 'campus']` for the spanning one.
+
+We chose the multilingual embedding model
+`paraphrase-multilingual-mpnet-base-v2` over the English-only
+`all-mpnet-base-v2` used in the course lessons, because students ask in Arabic
+against a knowledge base written in English with Arabic summaries. Without that
+swap the router would route Arabic questions correctly and then retrieve nothing
+useful — a failure that is easy to miss, because the routing evidence still
+looks perfect. Both models are free and run locally with no API key.
+
+### RAG architecture chosen: **Hybrid**
+
+Not **2-Step**, because retrieval is not unconditional: a classifier decides
+which store to search, and `action` questions skip retrieval entirely. Not
+purely **Agentic**, because the workers do not decide *when* to retrieve — the
+route is fixed before they run, which caps LLM calls per request and keeps
+latency predictable.
+
+**Hybrid** in the course's precise sense, with both intermediate steps actually
+implemented:
+
+- **Query enhancement** — `rewrite_followup` resolves a follow-up into a
+  standalone question using the conversation state for that thread, before it
+  reaches the classifier or the retriever.
+- **Retrieval validation** — if the routed store returns nothing, the workflow
+  re-routes to the other store once before concluding the answer is not in its
+  sources.
+
+Hybrid is the right trade for student services because student questions are
+frequently ambiguous, underspecified, or span both domains, and confidently
+answering from the wrong domain is worse than one extra round-trip.
 
 ---
 
@@ -205,19 +265,17 @@ lifetimes, and both are wired into the same `@entrypoint`.
 **Short-term** is the checkpointer, scoped by `thread_id`. The entrypoint takes
 a `previous` parameter and returns `entrypoint.final(value=..., save=...)`, so
 each thread carries its last three turns. That state is what `rewrite_followup`
-reads to resolve pronouns, and it is what holds a paused `interrupt()` until it
-is resumed.
+reads, and it is what holds a paused `interrupt()` until it is resumed.
 
-**Long-term** is an `InMemoryStore`, namespaced by `("students", student_id)`.
-It holds `preferred_language`, `questions_asked`, and `last_topic`. It is read
-at the top of every run and written at the bottom. It is *not* a growing list of
-chat messages — it is keyed by **student**, not by conversation, and it survives
-the conversation ending.
+**Long-term** is an `InMemoryStore`, namespaced by `("students", student_id)`,
+holding `preferred_language`, `questions_asked`, and `last_topic`. It is read at
+the top of every run and written at the bottom. It is *not* a growing list of
+chat messages — it is keyed by **student**, not by conversation.
 
 The distinction is visible in one place in the code: `history` comes from
-`previous` (dies with the thread), `profile` comes from the Store (does not).
+`previous` and dies with the thread; `profile` comes from the Store and does not.
 
-**Cross-thread proof** — a fact written in one thread, read back in another:
+### Cross-thread proof
 
 ```
 conv-A  questions_asked: 1 | language learned: ar
@@ -225,43 +283,43 @@ conv-B  questions_asked: 2 | language recalled: en   <- survived a brand-new thr
 conv-C  questions_asked: 1 (different student)
 
 conv-B's answer, in Arabic, without the student asking for Arabic:
-آخر موعد للانسحاب هو **نهاية الأسبوع العاشر** من الفصل الدراسي. [course_withdrawal.md]
-
-The counter is the unambiguous proof: the student asked once in `conv-A` and
-the count came back as **2** in a completely different thread, while a
-different student in `conv-C` started from 1. That value cannot have come from
-the thread, because the thread was new.
-
-One honest wrinkle in the printed line above. `conv-B` reports
-`language recalled: en`, not `ar`, even though its answer is in Arabic. Both
-are correct and the reason is ordering: the profile is read at the *start* of
-the run — where `preferred_language` was still `ar`, which is why the answer
-came back in Arabic — and rewritten at the *end* with the language of the
-current question, which was English. So the field tracks the most recent
-language rather than a stable preference. That is a design weakness, not a
-memory failure: a real system should either keep the first observed language
-until the student changes it explicitly, or store a per-language count. The
-`questions_asked` counter is unaffected and is the cleaner proof of the two.
+آخر موعد للانسحاب هو نهاية الأسبوع العاشر من الفصل الدراسي. [course_withdrawal.md]
 ```
 
-If `conv-B` had reported 1, the value was living in the thread rather than the
-store, and it would not have been long-term memory at all.
+The counter is the unambiguous proof: the student asked once in `conv-A` and the
+count came back as **2** in a completely different thread, while a different
+student in `conv-C` started from 1. That value cannot have come from the thread,
+because the thread was new.
 
-**Short-term proof** — a follow-up resolved from the previous turn on the same
-thread:
+One honest wrinkle. `conv-B` reports `language recalled: en`, not `ar`, even
+though its answer is in Arabic. Both are correct, and the reason is ordering:
+the profile is read at the *start* of the run — where `preferred_language` was
+still `ar`, which is why the answer came back in Arabic — and rewritten at the
+*end* with the language of the current question, which was English. So the field
+tracks the most recent language rather than a stable preference. That is a
+design weakness, not a memory failure: a real system should keep the first
+observed language until the student changes it explicitly, or store a
+per-language count. The `questions_asked` counter is unaffected and is the
+cleaner proof of the two.
+
+### Short-term proof
 
 ```
-turn 1: The minimum attendance required is **75%** of the scheduled contact
-        hours for each course. 【attendance_policy.md】
+turn 1: The minimum attendance required is **75 %** of the scheduled contact
+        hours. [attendance_policy.md]
 
   [rewrite] 'What happens if I fall below it?'
          -> 'What happens if I fall below the minimum attendance percentage?'
 
-turn 2: If your attendance drops below the required 75 percent, you will be
-        **barred from sitting the final examination** for that course and will
-        receive a **grade of DN (denied)**, which is treated as an **F for GPA
-        purposes**【attendance_policy.md】.
+turn 2: If your attendance in a course drops below the minimum 75 %, you will be
+        barred from sitting the final examination for that course and will
+        receive a grade of **DN** (Denied). This DN is treated as an **F** for
+        GPA purposes. [attendance_policy.md]
 ```
+
+The `[rewrite]` line is the evidence. "It" was resolved from the previous turn
+on the same thread — a question meaningless in isolation was answered correctly
+because the thread carried context.
 
 ---
 
@@ -274,14 +332,19 @@ That is a real reason to require human approval, not a decorative one.
 
 The escalation decision is made by the **model**: the router returns
 `destination == "action"` when the student is asking to *file* something rather
-than asking a question. The distinction between *"How do I withdraw?"* and
-*"I want to withdraw from STAT301"* is intent, not vocabulary, which is exactly
-what a classifier is for and what a keyword rule cannot do.
+than asking a question. As section 2 shows, the distinction between *"How do I
+withdraw?"* and *"I want to withdraw from STAT301"* is intent, not vocabulary.
 
-Both halves are demonstrated. `interrupt()` pauses the run and surfaces the
-request to an advisor; `Command(resume=...)` completes it. The advisor can
-approve, reject with a note, or **approve with edits** — and the advisor's edit
-is what reaches the registry:
+Both halves are demonstrated:
+
+```
+=== PAUSED FOR ADVISOR APPROVAL ===
+  action                : A student advisor must approve this before it is filed
+  type                  : withdrawal
+  student_id            : s2201
+  course_code           : STAT301
+  student_stated_reason : the workload is too heavy
+```
 
 ```
 === RESUMED AND COMPLETED ===
@@ -294,18 +357,13 @@ answer : Withdrawal WD-s2201-STAT301 filed for STAT301.
    'course': 'STAT301', 'reason': 'Medical grounds — documentation on file with Student Health.'}
 ```
 
-Preceded by the pause:
+The advisor can approve, reject with a note, or **approve with edits** — and the
+advisor's edit is what reaches the registry. The recorded reason is *"Medical
+grounds"*, not the student's original *"the workload is too heavy"*. A gate that
+can only say yes is not really a gate, and a pause that cannot change the
+outcome proves nothing.
 
-```
-=== PAUSED FOR ADVISOR APPROVAL ===
-  action                : A student advisor must approve this before it is filed
-  type                  : withdrawal
-  student_id            : s2201
-  course_code           : STAT301
-  student_stated_reason : the workload is too heavy
-```
-
-And the rejection path, which files nothing:
+The rejection path files nothing:
 
 ```
 PAUSED: CHEM210
@@ -314,11 +372,6 @@ answer : Your request was not filed. Advisor note: Past the end-of-week-10
          deadline; withdrawal cannot be processed.
 registry entries: 1 — unchanged, nothing was filed.
 ```
-
-The recorded reason is the advisor's text, not the student's original *"the
-workload is too heavy"*. A gate that can only say yes is not really a gate, and
-a pause that does not change the outcome proves nothing. The rejection path is
-also demonstrated, returning `rejected_by_advisor` with nothing filed.
 
 There is a second, unplanned route into the same gate. When `parse_action`
 cannot extract a request, it falls back to an empty `ActionRequest`, which makes
@@ -332,15 +385,19 @@ human-in-the-loop prompt rather than a stack trace.
 Built on the **Functional API** — `@task` for each discrete unit of work and a
 single `@entrypoint` orchestrating them with ordinary Python control flow. There
 is no `StateGraph` anywhere. Tasks are awaited with `.result()`, and the
-two-source branch launches both retrievals before awaiting either, so they
-overlap.
+two-source branch launches both retrievals before awaiting either.
 
-Three of the four error strategies are implemented:
+Three of the four error strategies are implemented.
 
-**Transient — `RetryPolicy`.** `retrieve_one` carries a real
-`RetryPolicy(max_attempts=3, initial_interval=0.5)` on its `@task` decorator. A
-`SIMULATE_FLAKY` flag makes the first attempt raise `ConnectionError`, so the
-retry can be observed rather than assumed:
+### Transient — `RetryPolicy`
+
+Every task that calls the provider carries a real `RetryPolicy` object:
+`classify`, `rewrite_followup`, `parse_action`, `synthesize`, and `retrieve_one`.
+The three tasks that make no provider call — `submit_withdrawal`,
+`get_course_code`, `request_approval` — deliberately do not.
+
+To prove the policy fires rather than merely exists, a `SIMULATE_FLAKY` flag
+makes the first attempt raise `ConnectionError`:
 
 ```
   [retrieve_one] attempt #1 -- raising
@@ -350,33 +407,48 @@ total retrieval attempts: 2
 answer still returned successfully: True
 ```
 
-Two attempts, no error surfaced, and the answer still returned. No retry code
-of my own, and no `time.sleep()` loop.
+Two attempts, no error surfaced, no retry code of our own, and no
+`time.sleep()` loop.
 
-The simulated failure proves the mechanism is wired up. A **real** transient
-failure proved it was needed. During a normal run the two-source branch hit:
+**The simulated failure proves the mechanism. A real one proved it was needed —
+and that we had it wrong three times.**
+
+Groq's free tier allows 8,000 tokens per minute per model, and a full run
+exceeds it:
 
 ```
-RateLimitError: Error code: 429 - Rate limit reached for model
-`openai/gpt-oss-120b` ... service tier `on_demand` on tokens per minute (TPM):
-Limit 8000, Used 6676, Requested 1520. Please try again in 1.47s.
+RateLimitError: Error code: 429 - Rate limit reached for model `openai/gpt-oss-120b`
+... on tokens per minute (TPM): Limit 8000, Used 7307, Requested 866.
+Please try again in 1.297499999s.
 ```
 
-Nothing was wrong with the request — Groq's free tier allows 8,000 tokens per
-minute and the `both` branch is the heaviest call, because it feeds both
-corpora into one prompt. Two things were wrong with my design, though. The
-`RetryPolicy` was attached only to `retrieve_one`, a local vector search that
-can never rate-limit, while `synthesize` — the call that actually hits the
-provider — had none. And LangGraph's default `retry_on` does not cover provider
-SDK exceptions, so even an attached policy would have skipped `RateLimitError`
-silently. Both are fixed: the transient exception types are named explicitly,
-the policy backs off 2s → 4s → 8s → 16s to ride out a per-minute window, and
-retrieved context is capped per source to keep the request under the cap.
+Three separate mistakes surfaced through that one error:
 
-**LLM-recoverable — loop back with the error in context.** This is where the
-project's most interesting failures happened, and both were real, not simulated.
+1. **The policy was on the wrong task.** It was attached to `retrieve_one`, a
+   local vector search that can never rate-limit, while `synthesize` — which
+   actually calls the provider — had none. We fixed `synthesize`, and the next
+   429 came from `classify`, which also had none. We were patching whichever
+   task failed last instead of stating the rule. The rule is: *a provider call
+   gets the policy.* Applying it uniformly ended the problem.
+2. **`retry_on` did not cover the error.** LangGraph's default `retry_on` does
+   not include provider SDK exceptions, so even an attached policy would have
+   skipped `RateLimitError` silently. The transient types are now named
+   explicitly in a `TRANSIENT` tuple.
+3. **The backoff was too short to ever work.** Our first schedule was 2s → 4s →
+   8s → 16s: 30 seconds total across five attempts. The TPM limit is a
+   **60-second** window, so the policy gave up while still inside the window it
+   was waiting on. It is now 5s → 10s → 20s → 40s → 45s across six attempts,
+   which crosses a window boundary. A retry policy that cannot outlast the thing
+   it retries against is decoration.
 
-*First failure.* The router returned a tool call with an invented key name:
+We also capped retrieved context at 1,800 characters per source, since the
+two-source branch concatenates two of them.
+
+### LLM-recoverable — loop back with the error in context
+
+Two real failures, neither simulated.
+
+**First**, the router returned a tool call with an invented key name:
 
 ```
 "parameters for tool MurshidRoute did not match schema:
@@ -384,18 +456,18 @@ project's most interesting failures happened, and both were real, not simulated.
 failed_generation: {"low": "high", "destination": "campus", ...}
 ```
 
-The model had emitted `"low"` as a key. The cause was my own field description,
+The model emitted `"low"` as a *key*. The cause was our own field description,
 which began with the bare token *"low when the question is ambiguous…"* — the
 model read the leading value name as the key. The fix was in the description,
 not the model: every description now opens by describing the field, and enum
 values appear only quoted after "Pick" or "Use". This is the routing lesson's
-own point turned back on me — the `description=` **is** the prompt.
+own point turned back on us — the `description=` **is** the prompt.
 
-*Second failure.* `parse_action` hit `400 tool_use_failed: "Tool choice is
-required, but model did not call a tool"` — the model correctly judged that a
-question contained no formal request and declined to call the tool at all.
+**Second**, `parse_action` hit `400 tool_use_failed: "Tool choice is required,
+but model did not call a tool"` — the model correctly judged that a question
+contained no formal request and declined to call the tool at all.
 
-Both were handled the same way, and the handling is deliberately precise:
+Both are handled the same way, and the handling is deliberately precise:
 
 ```python
 RECOVERABLE = (ValidationError, groq.BadRequestError)
@@ -403,28 +475,44 @@ RECOVERABLE = (ValidationError, groq.BadRequestError)
 
 `ValidationError` means the object came back malformed. `groq.BadRequestError`
 means the provider rejected the tool call before Pydantic ever saw it. Catching
-only `ValidationError` — which is what I wrote first — would have let the second
-class of failure crash the workflow. `classify` re-prompts with the error text
-in context; `parse_action` degrades into a human prompt.
+only `ValidationError` — which is what we wrote first — would have let the
+second class of failure crash the workflow. `classify` re-prompts with the error
+text in context; `parse_action` degrades into a human prompt.
 
-**User-fixable — `interrupt()`.** `get_course_code` pauses and asks when a
-withdrawal request does not name a course, then resumes with the supplied value.
+### User-fixable — `interrupt()`
 
-**Unexpected — let it bubble up.** There is deliberately no blanket
-`except Exception` anywhere. The recoverable types are named explicitly, and
-anything outside that tuple propagates to the caller where it is visible in the
-traceback and in the LangSmith trace — which is exactly where a genuine bug
-should appear.
+`get_course_code` pauses and asks when a withdrawal request does not name a
+course, then resumes with the supplied value.
+
+### Unexpected — let it bubble up
+
+No workflow task catches a bare `Exception`. The recoverable types are named
+explicitly in `RECOVERABLE`, and anything outside it propagates to the caller
+where it is visible in the traceback and in the LangSmith trace — exactly where
+a genuine bug should appear. The two broad `except Exception` clauses in the
+notebook are both in setup code: one lets `load_secret` fall through from Colab
+Secrets to environment variables to a `.env` file, and one turns an invalid
+LangSmith key into a printed warning instead of aborting the run.
 
 ### A design error worth recording
 
-My first version escalated to the approval gate on
+Our first version escalated to the approval gate on
 `route.destination == "action" or route.confidence == "low"`. That was wrong. An
 ambiguous *question* is not a request to file anything, and sending one to
 `parse_action` asked the model to extract a withdrawal from a question that
-contained none — which is what produced the second failure above. Low
+contained none — which is what produced the `tool_use_failed` error above. Low
 confidence now searches **both** stores instead of guessing one, and only
 `destination == "action"` reaches the human gate.
+
+### An environment failure worth recording
+
+The course lesson pins `chromadb==0.4.18` with `numpy<2` to work around a
+conflict in older Colab images. Our runtime does not preinstall chromadb at all,
+so the pin was obsolete — and actively harmful. Forcing numpy down to 1.26 broke
+`sentence-transformers` with `ModuleNotFoundError: No module named
+'numpy.strings'`, because Colab's scipy and sklearn are built against numpy 2.
+Installing a current chromadb and leaving numpy alone fixed it. A pin that
+solves yesterday's conflict can cause today's.
 
 ---
 
@@ -457,85 +545,85 @@ Tracing is enabled with `LANGCHAIN_TRACING_V2="true"` — the exact variable nam
 `LANGSMITH_TRACING_V2` is not a real variable and fails silently with no trace
 and no error. (The current LangChain docs use `LANGSMITH_TRACING`, without the
 suffix; the `_V2` in the legacy name versions the *tracing backend*, not the
-value, and dates from when LangSmith replaced the original tracer.) The key is
-verified with `client.list_projects()` before the agent runs, so an invalid key
-raises loudly instead of producing an empty project page, and
+value, and dates from when LangSmith replaced the original tracer. Both work.)
+The key is verified with `client.list_projects()` before the agent runs, so an
+invalid key raises loudly instead of producing an empty project page, and
 `wait_for_all_tracers()` flushes before inspection.
 
-**What the trace actually showed.** The `both`-destination run — the heaviest
-path, since it searches two stores — completed in **3.29s** using about **1K
-tokens**, at a cost of **$0.0003**. The tree matched the intended shape:
-`murshid` → `classify` → two `retrieve_one` calls → `synthesize`, with
-`ChatGroq` and `PydanticToolsParser` nested under `classify` and
-`VectorStoreRetriever` under the retrieval that hit the store.
+### What the trace showed
 
-Three things stood out, none of which I would have predicted:
+*Measured on the `openai/gpt-oss-120b` run, before we moved to the 20b model for
+rate-limit headroom. The proportions are the point, not the absolute figures.*
 
-**Retrieval is not the bottleneck, and neither is generation.** `classify`
-took 0.52s, the two retrievals 0.00s and 0.11s, and `synthesize` 0.29s — a
-total of **0.92s across all four instrumented tasks, out of a 3.29s run**.
-Roughly **72% of the wall-clock time is not inside any task I wrote.** That
-time is LangGraph orchestration and checkpointer serialisation — every task
-boundary writes state through the checkpointer, and this run also deserialised
-`MurshidRoute` and `ActionRequest` from a previous turn on the same thread. My
-instinct before opening the trace was to optimise the LLM calls; the trace says
-the framework overhead costs more than everything I wrote put together. On a
-free-tier API where each call already takes ~0.3–0.5s, that is the opposite of
-what I expected.
+The two-source run — the heaviest path, since it searches both stores —
+completed in **3.29s** using about **1K tokens**, at a cost of **$0.0003**. The
+tree matched the intended shape: `murshid` → `classify` → two `retrieve_one`
+calls → `synthesize`, with `ChatGroq` and `PydanticToolsParser` nested under
+`classify` and `VectorStoreRetriever` under the retrieval that hit the store.
+
+**Neither retrieval nor generation is the bottleneck.** `classify` took 0.52s,
+the two retrievals 0.00s and 0.11s, and `synthesize` 0.29s — **0.92s across all
+four instrumented tasks, out of a 3.29s run.** Roughly **72% of the wall-clock
+time is not inside any task we wrote.** That is LangGraph orchestration and
+checkpointer serialisation; this run also deserialised `MurshidRoute` and
+`ActionRequest` from a previous turn on the same thread. Our instinct before
+opening the trace was to optimise the LLM calls. The trace says the framework
+overhead costs more than everything we wrote put together.
 
 **The routing decision costs nearly as much as the answer.** `classify` spent
-**472 tokens** and `synthesize` **576** — the decision about *where* to send
-the question is almost as expensive as answering it. The reason is my own
-`MurshidRoute` field descriptions, which are deliberately verbose because
-that is what makes the router accurate. There is a real trade here: the same
-verbosity that fixed the routing (section 6) is what makes the classifier
-costly, and on a tier limited to 8,000 tokens per minute that directly reduces
-how many questions the system can serve.
+**472 tokens** and `synthesize` **576** — deciding *where* to send the question
+is almost as expensive as answering it, because our `MurshidRoute` field
+descriptions are deliberately verbose. There is a real trade here: the same
+verbosity that fixed the routing bug in section 6 is what makes the classifier
+costly, and on a tier limited to 8,000 tokens per minute that directly caps
+throughput.
 
-**The two retrievals did not overlap usefully.** One `retrieve_one` shows
-0.00s with no child span, the other 0.11s with a `VectorStoreRetriever` under
-it. The concurrency works, but at 110ms the entire retrieval step is noise next
-to a 3.29s run — the Parallelization in the `both` branch is architecturally
-correct and practically irrelevant at this scale.
+**The parallel retrieval is architecturally right and practically irrelevant.**
+At 110ms combined, the entire retrieval step is noise next to a 3.29s run.
 
-**What I would change.** Not the vector store, and not the model. I would
-trim the `MurshidRoute` descriptions once the router is stable, to reclaim
-those 472 tokens per question, and I would investigate the unaccounted 2.4s
-before optimising anything else — it is the single largest cost in the system
-and I only know it exists because the trace showed the child spans summing to
-far less than the parent.
+**What we would change:** not the vector store, and not the model. Trim the
+`MurshidRoute` descriptions once the router is stable to reclaim those 472
+tokens per question, and investigate the unaccounted 2.4s before optimising
+anything else — it is the single largest cost in the system, and we only know it
+exists because the child spans summed to far less than the parent.
 
-**Evaluation.** I also built a dataset of **6 routing examples** — four
-English, two Arabic, covering all four destinations — and scored the classifier
-with a deterministic grader comparing the predicted `destination` to the
-expected one. No LLM judge, so there is nothing to second-guess. The experiment
-scored **6/6 — `routes_correctly` average 1.00**, across two separate
-experiment runs (`murshid-routing-25ef4d3b` and `murshid-routing-82d5521a`),
-at P50 latencies of 0.47s and 0.56s respectively.
+### Evaluation
 
-Those latency figures are a useful cross-check on the trace above. The
-evaluation calls the classifier *only* — no retrieval, no synthesis — and its
-P50 of ~0.5s lines up with the 0.52s `classify` span in the full run. The
-routing decision costs about half a second wherever it is measured, which
-means the 3.29s total in the trace is genuinely not the model's doing.
+A dataset of **6 routing examples** — four English, two Arabic, covering all
+four destinations — scored with a deterministic grader comparing the predicted
+`destination` to the expected one. No LLM judge, so there is nothing to
+second-guess.
 
-The dataset produced a small lesson of its own. My first attempt reported
-`0it [00:00, ?it/s]` — zero examples evaluated — because an earlier crashed run
-had created the dataset before the examples were added, and the
-`if not client.has_dataset(...)` guard then skipped populating it on every run
-after that. The experiment link existed and looked entirely normal; it was
-simply empty. Rebuilding the dataset with its examples fixed it, and every run
-since has scored 6/6. It is a good
-illustration of why the observability section matters: the failure was silent,
-and the only way to notice was to look at the number of examples actually
-scored.
+```
+evaluated 6 examples
+routes_correctly: 6/6 passed
+```
 
-<!--
-If you could not get LangSmith working, DELETE this section's claims and say so
-plainly. Describe what you inspected instead: the printed handoff tool calls,
-the retrieval attempt counters, the sources_searched lists. An honest gap costs
-a few points. A fabricated finding your own output contradicts costs far more.
--->
+Two earlier experiments on the 120b model also scored 1.00 across 6/6 runs, at
+P50 latencies of 0.47s and 0.56s. Those figures cross-check the trace: the
+evaluation calls the classifier *only*, and a P50 of ~0.5s matches the 0.52s
+`classify` span in the full run — which is what tells us the 3.29s total is
+genuinely not the model's doing.
+
+### The failure this section caught twice
+
+Our first evaluation run reported `0it [00:00, ?it/s]` — zero examples scored —
+because an earlier crashed run had created the dataset before the examples were
+added, and the `if not client.has_dataset(...)` guard then skipped populating it
+on every run afterwards. The experiment link existed and looked entirely normal.
+It was simply empty.
+
+Rebuilding the dataset fixed the scoring, but the notebook's **saved output
+still said `0it`** even after a successful re-run. The cause is that tqdm's
+progress bar is a live display widget and Colab persists only its first frame:
+the browser showed `6/?` while the file on disk showed `0`. We added an explicit
+`print` of the pass count so the saved artefact reflects what actually happened —
+which is why the output above reads `routes_correctly: 6/6 passed` on a line of
+its own, immediately after the stale `0it` the widget left behind.
+
+Both failures were silent, and both were only visible by reading the artefact
+rather than trusting the display. That is a fair summary of why this section
+exists.
 
 ---
 
@@ -546,21 +634,23 @@ a few points. A fabricated finding your own output contradicts costs far more.
   semantics are real; the backend is a stub.
 - `InMemoryStore` and `InMemorySaver` do not survive a kernel restart. The
   production swaps are `SqliteSaver` / `PostgresSaver` and `PostgresStore`.
+- `preferred_language` tracks the most recent language rather than a stable
+  preference, as described in section 4.
+- The classifier is framing-sensitive on `gpt-oss-20b`: the same question routes
+  differently through `router.invoke(q)` and through `classify`, which wraps it
+  in one instruction sentence. Section 2 documents the case.
 - Short-term history is capped at the last three turns per thread. A longer
   conversation would need summarisation rather than truncation.
 - Sixteen documents is small enough that `k=3` similarity search suffices. A
   real corpus of thousands would need reranking and metadata filtering.
+- Arabic retrieval worked — *"لا أستطيع الدخول إلى بوابة الطالب"* correctly
+  retrieved `student_portal_access.md` and `it_helpdesk.md` from an English
+  corpus — but the knowledge base is English with short Arabic summaries on six
+  documents, not a genuinely bilingual corpus. We cannot tell from these results
+  how much of the success came from the multilingual embeddings and how much
+  from those summaries. Testing that properly would mean removing the summaries
+  and re-running the Arabic questions.
 - The two corpora legitimately cross-reference each other (a transcript can be
   blocked by an unreturned library item). Routing still sends the question to
   the store that *owns* the policy, but "disjoint" is a property of ownership,
   not of vocabulary.
-- Arabic retrieval worked, but it is the part I would test hardest before
-  trusting. *"لا أستطيع الدخول إلى بوابة الطالب"* correctly retrieved both
-  `student_portal_access.md` and `it_helpdesk.md` from an English corpus, and
-  the Arabic withdrawal request was correctly classified as an `action`. That
-  is cross-lingual retrieval working as intended. But the knowledge base is
-  English with short Arabic summaries appended to six documents, not a
-  genuinely bilingual corpus, so I cannot tell from these results how much of
-  the success came from the multilingual embeddings and how much from those
-  summaries. Testing that properly would mean removing the summaries and
-  re-running the Arabic questions.
