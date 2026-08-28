@@ -122,6 +122,62 @@ is a `@task`.
 
 ---
 
+## Run it locally
+
+A full local app with a web interface. Ask whatever you like — there are no
+canned questions, and it answers in Arabic or English.
+
+```bash
+git clone https://github.com/aljokha/murshid-capstone.git
+cd murshid-capstone
+
+python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+
+cp .env.example .env          # then open .env and paste your GROQ_API_KEY
+python run.py
+```
+
+It opens `http://127.0.0.1:7860` in your browser. Add `--share` for a temporary
+public link.
+
+> First start downloads the embedding model (~1 GB) and takes a few minutes.
+> After that it is cached and startup is quick. A free Groq key is enough —
+> get one at [console.groq.com/keys](https://console.groq.com/keys).
+
+### What the interface exposes
+
+It is not a wrapper around a chat model. Every message goes through
+`murshid.invoke()` — the same workflow the notebook demonstrates — so what you
+see is the real system:
+
+| In the interface | What it is showing |
+|---|---|
+| **How the answer was produced** | Which office the question was routed to, why, and which document stores were searched |
+| **Understood as…** | When you ask a follow-up, the standalone question it was rewritten into |
+| **Student ID** | Change it and the system treats you as a different person, with different memory |
+| **Start a new conversation** | Resets what was *said*, keeps what is known about the *student* |
+| **Advisor panel** | Appears when you ask to withdraw from a course. Approve, edit the reason, or reject |
+| **Registrar log** | What has actually been filed — showing the advisor's wording, not the student's |
+
+### Things worth trying
+
+- Ask in Arabic: *"لا أستطيع الدخول إلى بوابة الطالب"*
+- Ask about attendance, then just ask *"what happens if I fall below it?"*
+- Ask something that spans both offices in one sentence
+- Ask to withdraw from a course, then edit the reason before approving
+
+### Project layout
+
+```
+app/murshid.py    the system — documents, routing, memory, approval gate
+app/ui.py         the web interface
+run.py            start it
+notebooks/        the graded notebook, with every result saved
+```
+
+---
+
 ## How to run
 
 ### Option A — Google Colab (recommended, no local setup)
